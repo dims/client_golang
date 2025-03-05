@@ -41,7 +41,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"github.com/prometheus/common/expfmt"
 
 	"github.com/prometheus/client_golang/internal/github.com/golang/gddo/httputil"
@@ -64,6 +63,42 @@ const (
 	Gzip     Compression = "gzip"
 	Zstd     Compression = "zstd"
 )
+
+type CompressionEngine interface {
+	NewWriter(w io.Writer) (io.WriteCloser, error)
+	NewReader(r io.Reader) (io.ReadCloser, error)
+}
+
+var pluginsLock sync.Mutex
+var plugins = make(map[string]CompressionEngine)
+
+func RegisterCompressionEngine(name string, plugin CompressionEngine) error {
+	pluginsLock.Lock()
+	defer pluginsLock.Unlock()
+	if _, found := plugins[name]; found {
+		return fmt.Errorf("Plugin %q was registered twice", name)
+	}
+	plugins[name] = plugin
+	return nil
+}
+
+func newPluginWriter(name string, w io.Writer) (io.WriteCloser, error) {
+	pluginsLock.Lock()
+	defer pluginsLock.Unlock()
+	if _, found := plugins[name]; !found {
+		return nil, fmt.Errorf("Plugin %q was not found", name)
+	}
+	return plugins[name].NewWriter(w)
+}
+
+func newPluginReader(name string, r io.Reader) (io.ReadCloser, error) {
+	pluginsLock.Lock()
+	defer pluginsLock.Unlock()
+	if _, found := plugins[name]; !found {
+		return nil, fmt.Errorf("Plugin %q was not found", name)
+	}
+	return plugins[name].NewReader(r)
+}
 
 var defaultCompressionFormats = []Compression{Identity, Gzip, Zstd}
 
@@ -466,13 +501,10 @@ func negotiateEncodingWriter(r *http.Request, rw io.Writer, compressions []strin
 
 	switch selected {
 	case "zstd":
-		// TODO(mrueg): Replace klauspost/compress with stdlib implementation once https://github.com/golang/go/issues/62513 is implemented.
-		z, err := zstd.NewWriter(rw, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		z, err := newPluginWriter(selected, rw)
 		if err != nil {
 			return nil, "", func() {}, err
 		}
-
-		z.Reset(rw)
 		return z, selected, func() { _ = z.Close() }, nil
 	case "gzip":
 		gz := gzipPool.Get().(*gzip.Writer)

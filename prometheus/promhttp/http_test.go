@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -90,7 +89,7 @@ func readCompressedBody(r io.Reader, comp Compression) (string, error) {
 		got, err := io.ReadAll(reader)
 		return string(got), err
 	case Zstd:
-		reader, err := zstd.NewReader(r)
+		reader, err := newPluginReader(string(comp), r)
 		if err != nil {
 			return "", err
 		}
